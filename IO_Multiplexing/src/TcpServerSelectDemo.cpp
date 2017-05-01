@@ -144,7 +144,7 @@ int main(int argc, char *argv[])
                     {
                         maxfd = connect_fd;                     
                     }
-                    printf("Client connected, addr:%s\n", inet_ntoa(client_addr.sin_addr));  
+                    printf("New client connected, addr :%s:%d\n", inet_ntoa(client_addr.sin_addr), client_addr.sin_port);  
                     if (send(connect_fd, welcome_msg, strlen(welcome_msg), 0) == -1)
                     {
                         printf("Socket send welcome msg failed, error_num=%d, error_str=%s!\n", errno, strerror(errno));  
