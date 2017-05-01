@@ -97,6 +97,7 @@ int main(int argc, char *argv[])
                 FD_SET(connectfd[index], &readfds);                // add all connectfd to readfds for next select call
         }
 
+        printf("Select call!\n");
         int readyfd_num = select(maxfd + 1, &readfds, nullptr, nullptr, nullptr);    //wait for read event, write/exception are ignore
 
         switch (readyfd_num)
@@ -149,9 +150,15 @@ int main(int argc, char *argv[])
                     {
                         printf("Socket send welcome msg failed, error_num=%d, error_str=%s!\n", errno, strerror(errno));  
                         continue;
-                    
                     }  
+
                     send(connect_fd, "\r\n>", strlen("\r\n>"), 0);  
+
+                    if (--readyfd_num <= 0)
+                    {
+                        printf("No more readable fds, next loop select\n");
+                        continue;
+                    }
                 }
 
                 for (index = 0; index <= maxindex; ++index)     // check data on all exist connection fd
@@ -166,7 +173,7 @@ int main(int argc, char *argv[])
 
                         if (recv_msg_lenth <= 0)    // length = 0 when client closed 
                         {
-                            printf("Receive data NULL, client disconnected!\n");  
+                            printf("Receive data NULL, client:%s:%d disconnected!\n", inet_ntoa(client_addr.sin_addr), client_addr.sin_port);  
 
                             close(temp_connectfd);
                             FD_CLR(temp_connectfd, &readfds);   // close connect fd and clear in readfds set
@@ -188,10 +195,15 @@ int main(int argc, char *argv[])
                             printf("Socket send echo failed, error_num=%d, error_str=%s!\n", errno, strerror(errno));  
                             continue;
                         }  
+
                         send(temp_connectfd, "\r\n>", strlen("\r\n>"), 0);  
-                    
+
+                        if (--readyfd_num <= 0)
+                        {
+                            printf("No more readable fds, jump out of loop of data checking\n");
+                            break;
+                        }
                     }
-                
                 }
 
             }
