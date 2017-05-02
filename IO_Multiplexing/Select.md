@@ -16,10 +16,10 @@ select 函数的用途是在一段指定的时间内, 监听用户感兴趣的�
 ### 参数
 	
 1. nfds, 指定被监听的描述符的总数, 通常被设置为监听的所有描述符中的最大值+1, 因为描述符从0开始计数, 0,1,2...nfds-1 将被监听.
-2. readfds、writefds、exceptfds 分别指向可读、可写、异常等事件对应的文件描述符集合, 如果对某一个事件不感兴趣, 可以设为空指针. fd\_set 结构体包含一个整型数组, 数组的每个元素的每一位对应一个文件描述符, 假设使用32位整数, 那么该数组的第一个元素对应描述符 0~31, 第二个元素对应 32~63, 以此类推. fd\_set 能容纳的文件描述符数量由 FD\_SETSIZE 指定, 通常为 1024, 这就限制了 select 能同时处理的文件描述符的总量. 为了简化对 fd_set 对象的位操作, 有以下一系列宏来访问 fd\_set 结构体中的位. 
+2. readfds、writefds、exceptfds 分别指向可读、可写、异常等事件对应的文件描述符集合, 如果对某一个事件不感兴趣, 可以设为空指针. fd_set 结构体包含一个整型数组, 数组的每个元素的每一位对应一个文件描述符, 假设使用32位整数, 那么该数组的第一个元素对应描述符 0-31, 第二个元素对应 32-63, 以此类推. fd_set 能容纳的文件描述符数量由 FD_SETSIZE 指定, 通常为 1024, 这就限制了 select 能同时处理的文件描述符的总量. 为了简化对 fd_set 对象的位操作, 有以下一系列宏来访问 fd_set 结构体中的位. 
 	
 		#include <sys/select.h>
-		FD_ZERO(fd_set *fdset);				// 清除 fdset 的所有位
+		FD_ZERO(fd_set *fdset);			// 清除 fdset 的所有位
 		FD_SET(int fd, fd_set *fdset);		// 设置 fdset 的位 fd
 		FD_CLR(int fd, fd_set *fdset);		// 清除 fdset 的位 fd
 		int FD_ISSET(int fd, fd_set *fdset);// 检查 fdset 的位 fd 是否被设置
@@ -37,20 +37,20 @@ select 函数的用途是在一段指定的时间内, 监听用户感兴趣的�
 		fd_set rset;
 		while(1)
 		{
-			FD_ZERO(&rset);
-			FD_SET(5, &rset);				// 重新设置 rset 中所监听的位对应的 fd
-			select(6, &rset, null, null, null);
+		    FD_ZERO(&rset);
+		    FD_SET(5, &rset);	// 重新设置 rset 中所监听的位对应的 fd
+		    select(6, &rset, null, null, null);
 
-			if (FD_ISSET(6, rset) == 1)
-			{...}
+		    if (FD_ISSET(6, rset) == 1)
+		    {...}
 		}		
 
 3. timeout 参数用来设置 select 函数的超时时间, 它是一个 timeval 结构类型的指针, 采用指针参数是因为在正常返回时, 内核将修改它以告诉应用程序 select 等待了多长时间. 但是如果调用失败, timeout 的值是不确定的. timeval 结果定义如下:
 		
 		struct timeval
 		{
-			long tv_sec;	// 秒数
-			long tv_usec;	// 微秒数
+		    long tv_sec;	// 秒数
+		    long tv_usec;	// 微秒数
 		}
 	
 	这个参数有以下三种可能:
@@ -60,7 +60,7 @@ select 函数的用途是在一段指定的时间内, 监听用户感兴趣的�
 	- 不等待, 检查描述符后立即返回, 参数指向一个 timeval 结构变量, 且定时器值均为 0. 
 
 ### 返回值
-- >0: 就绪(可读、可写、异常)文件描述符的总数, select 调用成功时返回.
+- 大于 0: 就绪(可读、可写、异常)文件描述符的总数, select 调用成功时返回.
 - 0: 超时时间内没有任何文件描述符就绪.
 - -1: select 调用失败, 并设置 errno.
 
@@ -128,6 +128,15 @@ select 的一个优点是良好的跨平台, 目前几乎在所有的平台上�
 
 
 ## Demo 示列
+
+select 的使用流程图
+
+![](http://i.imgur.com/ttuJnSI.gif)
+
+参考:  
+[http://www.cnblogs.com/Anker/archive/2013/08/14/3258674.html](http://www.cnblogs.com/Anker/archive/2013/08/14/3258674.html)
+[https://www.ibm.com/support/knowledgecenter/en/ssw_i5_54/rzab6/xnonblock.htm](https://www.ibm.com/support/knowledgecenter/en/ssw_i5_54/rzab6/xnonblock.htm)
+
 下面是一个基于 select 实现的 TCP Echo Server.
 	[https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/src/TcpServerSelectDemo.cpp](https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/src/TcpServerSelectDemo.cpp)
 
@@ -141,12 +150,12 @@ select 的一个优点是良好的跨平台, 目前几乎在所有的平台上�
 		...
 		select(...);
 
-- 每次调用 select 前都要在 fd_set 中使能所有有效的客户连接对应的 bit. 如果像 Unix 网络编程6.8节示列那样, 会导致 server 只服务于最新接入的客户连接, 对已有连接上的数据 IO不会监听.
+- 每次调用 select 前都要在 fd_set 中使能所有有效的客户连接对应的 bit. 如果像 Unix 网络编程卷1 6.8节示列那样, 会导致 server 只服务于最新接入的客户连接, 对已有连接上的数据读写事件不会监听.
 
 	        for (index = 0; index < FD_SETSIZE; ++index) 
         	{
 	            if (connectfd[index] != -1)
-	                FD_SET(connectfd[index], &readfds);  // add all valid connectfd to readfds for next select call
+	                FD_SET(connectfd[index], &readfds);
         	}
 
 - 当有客户连接断开时, 不仅要把 fd_set 中对应的 bit清除, 也要把保存客户连接的数组中对应的 connect fd 设为初始值.
@@ -168,4 +177,27 @@ select 的一个优点是良好的跨平台, 目前几乎在所有的平台上�
 		}
 
 ### Demo 的缺陷
-1. 拒绝服务攻击
+1. 非阻塞 accept
+参考 Unix 网络编程卷1 16.6节, 默认情况下, Socket IO都是阻塞模式. 当使用 select 对 listen fd 监听等待一个外来连接, 新的连接接入时, select 返回并告知进程连接就绪, 随后的 accept 调用会顺利执行.  
+然而, 如何客户程序调用 connect 建立连接后发送一个 RST 到服务器, 正好发生在服务器 select 和 accpet 之间, select 向进程返回可读条件, 而accept时已完成连接已经被TCP协议栈驱逐出队列, 由于没有任何已完成的连接, 服务器阻塞. 服务器进程会一直阻塞在 accept调用上, 直到其他客户建立一个新的连接, 在此期间无法处理其他已就绪的描述符.  
+解决办法如下:  
+a. 将 listen fd 设为非阻塞
+b. 后续的 accept 调用中忽略以下错误: EWOULDBLOCK(Berkeley 实现, 客户终止连接时),ECONNABORTED (POSIX 实现, 客户终止连接时), EPROTO (SVR4 实现, 客户终止连接时), 以及 EINTR (信号被捕获).
+
+2. 非阻塞 read/recv  
+man select: [http://man7.org/linux/man-pages/man2/select.2.html](http://man7.org/linux/man-pages/man2/select.2.html)
+
+		Under Linux, select() may report a socket file descriptor as "ready
+	    for reading", while nevertheless a subsequent read blocks.  This
+	    could for example happen when data has arrived but upon examination
+	    has wrong checksum and is discarded.  There may be other
+	    circumstances in which a file descriptor is spuriously reported as
+	    ready.  Thus it may be safer to use O_NONBLOCK on sockets that should not block.
+
+	select 返回可读, 但是并没有告知进程有多少字节可读. 并且 select 和 read/recv 是独立的系统调用, 两个操作之间存在窗口, 当调用read时数据有可能被内核丢弃(协议栈检查到这个TCP分节检验和错误, 然后丢弃), ready因无数据可读而阻塞, 导致服务器无法处理其他已就绪的描述符.  
+	惊群现象: 多个进程或者线程通过 select 或者 epoll 监听一个 listen socket，当有一个新连接完成三次握手之后，所有进程都会通过 select 或者 epoll 被唤醒，但是最终只有一个进程或者线程 accept 到这个新连接，若是采用了阻塞 I/O，没有accept 到连接的进程或者线程就 block 住了
+	惊群现象: 多个进程或者线程通过 select 或者 epoll 监听一个 listen fd,当有一个新连接完成三次握手之后, 所有进程都会通过 select 或者 epoll 被唤醒, 但是最终只有一个进程或者线程 accept 到这个新连接. 若是采用了阻塞 I/O, 没有accept 到连接的进程或者线程就被阻塞了.(参考: [为什么 IO 多路复用要搭配非阻塞 IO? --- 林晓峰](https://www.zhihu.com/question/37271342/answer/81757593))
+
+参考:
+[https://www.zhihu.com/question/37271342](https://www.zhihu.com/question/37271342), [https://www.zhihu.com/question/33072351](https://www.zhihu.com/question/33072351).
+
