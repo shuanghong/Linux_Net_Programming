@@ -100,18 +100,19 @@
 
 - ssize_t recv(int sockfd, void *buf, size_t len, int flags)
 
-		数据接收的大致流程: 内核接受远端数据--->存到Linux TCP协议接收缓存区---> copy到用户空间buf(同时要清除协议缓存区). 一般len为用户程序指定的buf大小, recv() 这类的网络I/O并不是实际意义上的读操作, 只是将内核接收缓冲区的数据copy到用户空间, 真正的数据接收由内核协议栈完成. 如果将接收缓冲区大小设为 0, recv将直接从协议缓冲区(滑动窗口区)读取数据, 避免了数据从协议缓冲区到接收缓冲区的拷贝.  
+		数据接收的大致流程: 内核接受远端数据--->存到Linux TCP协议接收缓存区---> copy到用户空间buf(同时要清除协议缓存区).  
+		一般 len 为用户程序指定的buf大小, recv此类的I/O并非真正的读操作,只是将内核接收缓冲区数据copy到用户空间, 实际数据接收由内核协议栈完成.  
+		如果将接收缓冲区大小设为 0, recv将直接从协议缓冲区(滑动窗口区)读取数据, 避免了数据从协议缓冲区到接收缓冲区的拷贝.  
 		参数:
 			sockfd, accept()调用返回的 connection socket fd
 			buf, 用户程序指定的保存接收数据的缓冲区
-			len, 缓冲区的长度
-			flags, 标志, MSG_OOB: 即读取带外数据; MSG_PEEK: 从缓冲区返回数据但不清空缓冲区; MSG_WAITALL: 告知内核不要在尚未读入请求数目的字节之前返回
+			len, 请求读取的数据长度, 一般设为缓冲区的大小
+			flags, 标志位. MSG_OOB: 读取带外数据; MSG_PEEK:从缓冲区返回数据但不清空缓冲区; 
+					MSG_WAITALL: 告知内核不要在尚未读入请求数目的字节之前返回(当发生错误时仍然有可能返回比请求字节数要少的数据)
 		返回值:
 			调用成功返回一个实际读到的字节数
 			0: 客户端连接关闭
 			-1: 调用出错, 同时设置对应的 errno
-
-	一般 
 	
 	* 关于缓冲区的长度 len, 多大合适?  
 	对于数据流套接字(SOCK_STREAM, TCP), 如果应用层协议是交互式的, 选择一个能保存最大消息/命令的buf大小. 如果应用层协议要发送大块数据, 则buf大小越大越好, 大约等于内核接收缓冲区的大小.
@@ -120,9 +121,10 @@
 		参考: [http://stackoverflow.com/questions/2862071/how-large-should-my-recv-buffer-be-when-calling-recv-in-the-socket-library](http://stackoverflow.com/questions/2862071/how-large-should-my-recv-buffer-be-when-calling-recv-in-the-socket-library)
 
 	* recv 何时返回, 内核缓冲区数据实际大小对recv的影响   
-	recv调用时, 实际上内核接收缓冲区的数据长度未知. 当缓冲区没有数据时, 进程睡眠(默认阻塞模式下). 当接收缓冲区数据大小高于最低水位标志(SO_RCVLOWAT, 默认为1字节) 时, recv 认为可读.  
-	如果缓冲区数据比buf大, 则(TCP Socket)填满buffer后recv函数返回, 内核操作系统将剩下的数据排队,等待下一次调用 recv. 循环读取直到读取返回 EAGAIN,表示读完.
-	(UDP Socket)超出buf的数据会被丢弃. 如果缓冲区数据比buf小, 则取走缓存区中的所有数据后recv函数返回. 所以recv的策略是有多少读多少. 
+	recv调用时, 我们告知内核想要读取的数据大小, 实际上内核接收缓冲区的数据长度未知. 当缓冲区没有数据时, 进程睡眠(默认阻塞模式下). 当接收缓冲区数据高于最低水位标志(SO_RCVLOWAT, 默认为1字节) 时, recv 认为可读.  
+	如果缓冲区数据比buf大, 则(TCP Socket)填满buffer后recv函数返回, 内核操作系统将剩下的数据排队,等待下一次调用 recv. 用户程序循环读取直到返回 EAGAIN,表示读完.
+	(UDP Socket)超出buf的数据会被丢弃.   
+	如果缓冲区数据比buf小, 则取走缓存区中的所有数据后recv函数返回, 所以recv的策略是有多少读多少. 
 	
 	* 如何才能知道接收到了完整的数据消息   
 	TCP Socket, 在应用层协议建立一种判断消息结束的规则, 比如每个消息带有特殊的结束符, 或者消息中带有消息长度的字段.  
