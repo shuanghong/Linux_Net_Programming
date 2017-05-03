@@ -67,7 +67,12 @@ select 函数的用途是在一段指定的时间内, 监听用户感兴趣的�
 ## 文件描述符就绪条件
 
 ### 可读
-- Socket 内核接收缓冲区中的字节数 >= 低水位标记 SO_RCVLOWAT. 此时可以无阻塞地读该 Socket, 并且返回的字节数 > 0. 可以使用 SO_RCVLOWAT 选项设置低水位标记, 对于 TCP和UDP Socket, 默认值为 1.
+- Socket 内核接收缓冲区中的字节数 >= 低水位标记 SO_RCVLOWAT. 此时可以无阻塞地读该 Socket, 并且返回的字节数 > 0. 可以使用 SO_RCVLOWAT 选项设置低水位标记, 对于TCP和UDP Socket, 默认值为 1.
+
+		注: Linux 上的 select 和 poll 系统调用并不遵守SO_RCVLOWAT的设置, 即使是1字节可用也会标记套接字可读.   
+		后续的读取会被阻塞直到SO_RCVLOWAT字节数可用. 参考[http://man7.org/linux/man-pages/man7/socket.7.html]
+		The select(2) and poll(2) system calls currently do not respect the SO_RCVLOWAT setting on Linux.
+
 - Socket 通信的对方关闭连接(读半部关闭, 就是接收了 FIN 的TCP连接), 此时该 Socket 的读操作(read)将不阻塞并返回 0.
 - 监听 Socket 上有新的连接请求到来, 此时对该 Socket 执行 accept调用通常不会阻塞.
 - Sokcet 上有未处理的错误, 此时该 Socket 的读操作将不阻塞并返回 -1, 同时设置 errno. 也可以通过指定 SO_ERROR 套接字选项调用 getsockopt 获取并清除该错误.
@@ -198,6 +203,7 @@ man select: [http://man7.org/linux/man-pages/man2/select.2.html](http://man7.org
 	惊群现象: 多个进程或者线程通过 select 或者 epoll 监听一个 listen socket，当有一个新连接完成三次握手之后，所有进程都会通过 select 或者 epoll 被唤醒，但是最终只有一个进程或者线程 accept 到这个新连接，若是采用了阻塞 I/O，没有accept 到连接的进程或者线程就 block 住了
 	惊群现象: 多个进程或者线程通过 select 或者 epoll 监听一个 listen fd,当有一个新连接完成三次握手之后, 所有进程都会通过 select 或者 epoll 被唤醒, 但是最终只有一个进程或者线程 accept 到这个新连接. 若是采用了阻塞 I/O, 没有accept 到连接的进程或者线程就被阻塞了.(参考: [为什么 IO 多路复用要搭配非阻塞 IO? --- 林晓峰](https://www.zhihu.com/question/37271342/answer/81757593))
 
-参考:
-[https://www.zhihu.com/question/37271342](https://www.zhihu.com/question/37271342), [https://www.zhihu.com/question/33072351](https://www.zhihu.com/question/33072351).
+	参考:  
+	[为什么 IO 多路复用要搭配非阻塞 IO?](https://www.zhihu.com/question/37271342)  
+	[在使用Multiplexed I/O的情况下，还有必要使用Non Blocking I/O么](https://www.zhihu.com/question/33072351).
 
