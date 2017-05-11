@@ -13,8 +13,8 @@ epoll 是 Linux 上特有的I/O复用函数, 在Linux2.6内核中正式引入. e
 
     int epoll_create1(int flags);
 		参数 flags： 0 --- 与epoll_create完全一样.
-					EPOLL_CLOEXEC --- 对返回的 epfd 设置close-on-exec (FD_CLOEXEC) 标志, 这样做可以防止此fd泄露给执行exec后的进程.
-					EPOLL_NONBLOCK --- 将返回的epfd设置为非阻塞
+				EPOLL_CLOEXEC --- 对返回的 epfd 设置close-on-exec (FD_CLOEXEC) 标志, 这样做可以防止此fd泄露给执行exec后的进程.
+				EPOLL_NONBLOCK --- 将返回的epfd设置为非阻塞
 		返回值: 如果调用成功, 返回一个新的代表epoll实例的文件描述符, -1 则出现错误并设置 errno
 更多参考 [epoll_create(2)](http://man7.org/linux/man-pages/man2/epoll_create.2.html)
 
@@ -24,20 +24,23 @@ epoll 是 Linux 上特有的I/O复用函数, 在Linux2.6内核中正式引入. e
 	int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 	参数 epfd: epoll_create 返回的 fd
 		 fd: 需要操作的目标文件描述符, 如 listenfd 或 connfd
-		 op: 告知epfd对上面文件描述符fd的操作类型, EPOLL_CTL_ADD --- 在epoll实例的事件表(参数event)中注册fd上的事件; EPOLL_CTL_MOD --- 在事件表中修改fd上的注册事件; EPOLL_CTL_DEL --- 在事件表中删除fd上的注册事件
+		 op: 告知epfd对上面文件描述符fd的操作类型. 取值如下:
+			 EPOLL_CTL_ADD --- 在epoll实例的事件表(参数event)中注册fd上的事件;
+			 EPOLL_CTL_MOD --- 在事件表中修改fd上的注册事件; 
+			 EPOLL_CTL_DEL --- 在事件表中删除fd上的注册事件.
 		 event: epoll实例上fd的事件类型, 结构如下:
-				struct epoll_event 
-				{
-          			uint32_t     events;// 事件类型, EPOLLIN(数据可读), EPOLLOUT(数据可写), EPOLLLT(电平触发), EPOLLLT(边沿触发)
-                	epoll_data_t  data; // 用户数据, 结构如下, 是一个union联合体, 可以保存很多类型的信息, 通常使用最多的是fd成员, 一般设为listenfd 或 connfd
+			struct epoll_event {
+          		uint32_t     events;// 事件类型, EPOLLIN(数据可读), EPOLLOUT(数据可写), EPOLLLT(电平触发), EPOLLLT(边沿触发)
+               	epoll_data_t  data; // 用户数据, union联合体, 可以保存很多类型的信息, 通常使用最多的是fd成员, 一般设为listenfd 或 connfd
            		};
-				typedef union epoll_data {
-               			void        *ptr;
-               			int          fd;
-               			uint32_t     u32;
-               			uint64_t     u64;
-           				} epoll_data_t;
+			typedef union epoll_data {
+               		void        *ptr;
+               		int          fd;
+               		uint32_t     u32;
+               		uint64_t     u64;
+           			} epoll_data_t;
 	返回值: 0 --- 调用成功, -1 --- 调用出错并设置 errno
+
 更多参考 [epoll_ctl(2)](http://man7.org/linux/man-pages/man2/epoll_ctl.2.html)
 
 ### epoll_wait 在一段超时时间内等待epfd上一组文件描述符上的事件发生
@@ -50,6 +53,7 @@ epoll 是 Linux 上特有的I/O复用函数, 在Linux2.6内核中正式引入. e
 		 maxevents: 每次处理的最大事件数, 即多少个 event 结构
 		 timeout: 超时时间(ms), 0 --- 调用立即返回, -1 --- 调用阻塞直到某个事件发生.
 	返回值: 调用成功则返回就绪的文件描述符个数, -1 --- 调用出错并设置 errno
+
 epoll_wait 函数如果检测到事件, 将所有的就绪事件从内核事件表(由epfd参数指定)复制到参数 events指向的结构数组中, 这个数组只用于输出epoll_wait检测到的就绪事件, 而不像 select 和 poll 的数组参数既用于传入用户注册的事件, 又用于输出内核检测到的事件, 这就极大地提供了用户程序索引就绪文件描述符的效率.  
 更多参考 [epoll_wait(2)](http://man7.org/linux/man-pages/man2/epoll_wait.2.html)
 
@@ -79,7 +83,7 @@ ET模式在很大程度上减少了epoll事件被重复触发的次数, 因此�
 
 ### 最大连接数限制
 
-epoll 没有最大并发连接的限制, 上限是应用进程最大可以打开文件的数目. 这个数字一般远大于2048, 与系统内存关系很大, 具体可以cat /proc/sys/fs/file-max 查看.
+epoll 没有最大并发连接的限制, 上限是应用进程最大可以打开文件的数目. 这个数字一般远大于2048, 与系统内存关系很大, 具体可以 cat /proc/sys/fs/file-max 查看.
 
 ### 效率提升, 不随FD数目增加而线性下降
 epoll 最大的优点就在于它只处理“活跃”的连接, 而跟连接总数无关.  
@@ -87,7 +91,7 @@ select 中用户程序需要轮询所有的fd_set来查找就绪的文件描述�
 epoll的解决方案不像select或poll一样每次都把current轮流加入fd对应的设备等待队列中,而只在调用epoll_ctl时把current挂一遍(这一遍必不可少),并为每个fd指定一个回调函数. 当设备就绪, 唤醒等待队列上的等待者时调用这个回调函数, 而这个回调函数会把就绪的fd加入一个就绪链表, epoll_wait的工作实际上就是在这个就绪链表中查看有没有就绪的fd.
 
 ### 使用mmap加速内核与用户空间的数据传递
-3. 内存拷贝, epoll 使用了“共享内存”. 在epoll_ctl函数中, 每次注册新的事件到epoll句柄中时(op = EPOLL_CTL_ADD), 会把所有的fd拷贝进内核, 切每个fd在整个过程中只会拷贝一次, 在调用epoll_wait不会再次拷贝, 而是通过mmap同一块内存实现内核与用户空间的数据传递. select和poll需要在内核空间和用户空间来回拷贝.
+内存拷贝, epoll 使用了“共享内存”. 在epoll_ctl函数中, 每次注册新的事件到epoll句柄中时(op = EPOLL_CTL_ADD), 会把所有的fd拷贝进内核, 但每个fd在整个过程中只会拷贝一次, 之后不会再拷贝, 而是通过mmap同一块内存实现内核与用户空间的数据传递. select和poll需要在内核空间和用户空间来回拷贝.
 
 ### 总结
 1. select, poll实现需要自己不断轮询所有fd集合, 直到设备就绪, 期间可能要睡眠和唤醒多次交替. 而epoll其实也需要调用epoll_wait不断轮询就绪链表, 期间也可能多次睡眠和唤醒交替, 但是它是设备就绪时调用回调函数, 把就绪fd放入就绪链表中, 并唤醒在epoll_wait中进入睡眠的进程. 虽然都要睡眠和交替, 但是select和poll在“醒着”的时候要遍历整个fd集合, 而epoll在“醒着”的时候只要判断一下就绪链表是否为空就行了, 这就是回调机制带来的性能提升.
