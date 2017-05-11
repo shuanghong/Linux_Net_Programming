@@ -143,7 +143,7 @@ select 的使用流程图
 [https://www.ibm.com/support/knowledgecenter/en/ssw_i5_54/rzab6/xnonblock.htm](https://www.ibm.com/support/knowledgecenter/en/ssw_i5_54/rzab6/xnonblock.htm)
 
 下面是一个基于 select 实现的 TCP Echo Server.
-	[https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/src/TcpServerSelectDemo.cpp](https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/src/TcpServerSelectDemo.cpp)
+	[https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/Select/src/TcpServerSelectDemo.cpp](https://github.com/shuanghong/Linux_Net_Programming/blob/master/IO_Multiplexing/Select/src/TcpServerSelectDemo.cpp)
 
 代码中用一个数组(connectfd[FD_SETSIZE])来保存客户端接入的所有连接, 如上面缺点中所述, 用户代码仍然需要在循环中依次调用 FD_ISSET() 来检查哪个connectfd[]的bit被内核设置. 用一个变量(maxindex)来保存最大客户连接 fd 的下标, 这样可以减少调用的循环次数.  
 代码中需要注意的地方:
