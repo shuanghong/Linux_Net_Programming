@@ -97,6 +97,10 @@ epoll的解决方案不像select或poll一样每次都把current轮流加入fd�
 1. select, poll实现需要自己不断轮询所有fd集合, 直到设备就绪, 期间可能要睡眠和唤醒多次交替. 而epoll其实也需要调用epoll_wait不断轮询就绪链表, 期间也可能多次睡眠和唤醒交替, 但是它是设备就绪时调用回调函数, 把就绪fd放入就绪链表中, 并唤醒在epoll_wait中进入睡眠的进程. 虽然都要睡眠和交替, 但是select和poll在“醒着”的时候要遍历整个fd集合, 而epoll在“醒着”的时候只要判断一下就绪链表是否为空就行了, 这就是回调机制带来的性能提升.
 2. select, poll每次调用都要把fd集合在内核空间和用户空间来回拷贝, 并且要把current往设备等待队列中挂一次, 而epoll只要一次拷贝, 而且把current往等待队列上挂也只挂一次(在epoll_wait的开始, 注意这里的等待队列并不是设备等待队列, 只是一个epoll内部定义的等待队列)这也能节省不少的开销.
 
+参考:  
+[http://blog.csdn.net/gatieme/article/details/50979090](http://blog.csdn.net/gatieme/article/details/50979090)
+[http://blog.csdn.net/jiange_zh/article/details/50454726](http://blog.csdn.net/jiange_zh/article/details/50454726)
+
 ## 原理及内核实现
 占坑
 
