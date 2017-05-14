@@ -1,7 +1,7 @@
 # IO复用之 --- Epoll
 epoll 是 Linux 上特有的I/O复用函数, 在Linux2.6内核中正式引入. epoll使用一组函数来完成任务, 而不像 select, poll 是单个函数.
 
-## API 函数
+## System call(系统调用)
 
 ### epoll_create 创建一个epoll句柄
 
@@ -102,7 +102,44 @@ epoll的解决方案不像select或poll一样每次都把current轮流加入fd�
 [http://blog.csdn.net/jiange_zh/article/details/50454726](http://blog.csdn.net/jiange_zh/article/details/50454726)
 
 ## 原理及内核实现
-占坑
+1. eventpoll_init
+
+Linux 操作系统启动时, 内核初始化执行 eventpoll_init, 用来完成epoll相关资源的分配和初始化, 源码如下:
+	
+	static int __init eventpoll_init(void)
+	{
+		...	
+		/* Allocates slab cache used to allocate "struct epitem" items */
+		epi_cache = kmem_cache_create("eventpoll_epi", sizeof(struct epitem),
+				0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL);
+	
+		/* Allocates slab cache used to allocate "struct eppoll_entry" */
+		pwq_cache = kmem_cache_create("eventpoll_pwq",
+				sizeof(struct eppoll_entry), 0, SLAB_PANIC, NULL);
+	
+		return 0;
+	}
+
+内核使用slab分配器在高速cache区分配内存用来存放struct epitem 和struct ppoll_entry. epitem 是内核管理epoll的基本数据结构, 当调用epoll_ctl()像系统中添加一个 fd 时, 就创建一个 epitem 实例. epitem与fd对应, epitem之间以rb_tree组织, tree的root保存在epoll实例中(epollfd, 也就是struct eventpoll). 这里使用rb_tree的原因是提高查找,插入以及删除的速度.rb_tree对以上3个操作都具有O(lgN)的时间复杂度.
+
+	/*
+	 * Each file descriptor added to the eventpoll interface will
+	 * have an entry of this type linked to the "rbr" RB tree.
+	 * 每个添加到 eventpoll 的 fd 都有一个 epitem
+	 */
+	struct epitem {
+	    struct rb_node  rbn;   		// 红黑树. 
+	    struct list_head  rdllink;  // 双向链表, 已经就绪的epitem(监听的fd)都会被链到eventpoll的rdllist中
+	    struct epitem  *next;
+	 	struct epoll_filefd  ffd;   //epitem 对应的fd信息
+	 	int  nwait;                 //poll操作中事件的个数
+
+	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列，功能类似于select/poll中的poll_table
+	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd,所以一个eventpoll结构体会对应多个epitem结构体.
+	    struct list_head  fllink;   //双向链表, 用来链接被监视的fd对应的struct file. 因为file里有f_ep_link,用来保存所有监视这个文件的epoll节点
+	    struct epoll_event  event;  //注册的感兴趣的事件, epoll_ctl时从用户空间传入的 epoll_event	
+	}
+
 
 ## Demo 示列
 占坑
