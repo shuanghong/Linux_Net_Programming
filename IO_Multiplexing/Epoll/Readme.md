@@ -102,6 +102,54 @@ epoll的解决方案不像select或poll一样每次都把current轮流加入fd�
 [http://blog.csdn.net/jiange_zh/article/details/50454726](http://blog.csdn.net/jiange_zh/article/details/50454726)
 
 ## 原理及内核实现
+
+### 主要的数据结构
+
+- eventpoll
+
+struct eventpoll 是 epoll的核心结构, 执行epoll_create1时创建一个eventpoll对象, 对应一个epoll实例. 并与”epfd”和”file”关联起来, 用户态所有对epoll的操作直接通过这个关联的”epfd”进行, 而内核太则操作这个eventpoll对象.
+
+	struct eventpoll {
+		...
+		wait_queue_head_t wq;			//sys_epoll_wait() 使用的等待队列, 调用epoll_wait()时, 挂在这个等待队列上
+		wait_queue_head_t poll_wait;	//file->poll() 使用的等待队列, epollfd本身被poll的时候
+	
+		struct list_head rdllist;		//事件就绪链表, 指向所有就绪的fds(epitem)
+		struct rb_root rbr;				//管理每个被监听的fd(epitem)的红黑树(树根), 所有要监听的fd都在这里
+		struct epitem *ovflist;			//将事件就绪的fd进行链接起来发送至用户空间
+	
+		struct wakeup_source *ws;
+		struct user_struct *user;		//保存创建 eventpoll fd 用户信息
+		struct file *file;
+	
+		int visited;
+		struct list_head visited_list_link;
+	};
+
+- epitem
+
+struct epitem 是内核管理epoll所监视的fd的数据结构, 执行epoll_ctl()像系统中添加一个 fd 时, 就创建一个epitem对象. epitem与fd对应, epitem之间以rb_tree组织, tree root保存在eventpoll中. 这里使用rb_tree的原因是提高查找,插入以及删除的速度, rb_tree对以上3个操作都具有O(lgN)的时间复杂度, 后续查找某一个fd 是否有事件发生都会操作rb_tree.
+
+	/*
+	 * Each file descriptor added to the eventpoll interface will
+	 * have an entry of this type linked to the "rbr" RB tree.
+	 * 每个添加到 eventpoll 的 fd 都有一个 epitem
+	 */
+	struct epitem {
+	    struct rb_node  rbn;   		// 红黑树, 保存被监视的fd
+	    struct list_head  rdllink;  // 双向链表, 已经就绪的epitem(fd)都会被链到eventpoll的rdllist中
+	    struct epitem  *next;
+	 	struct epoll_filefd  ffd;   //epitem 对应的fd信息
+	 	int  nwait;                 //poll操作中事件的个数
+
+	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列，功能类似于select/poll中的poll_table
+	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd,所以一个eventpoll结构体会对应多个epitem结构体.
+	    struct list_head  fllink;   //双向链表, 用来链接被监视的fd对应的struct file. 因为file里有f_ep_link,用来保存所有监视这个文件的epoll节点
+	    struct epoll_event  event;  //注册的感兴趣的事件, epoll_ctl时从用户空间传入的 epoll_event	
+	}
+
+
+### system call 的内核实现
 1. eventpoll_init
 
 Linux 操作系统启动时, 内核初始化执行 eventpoll_init, 用来完成epoll相关资源的分配和初始化, 源码如下:
@@ -120,24 +168,31 @@ Linux 操作系统启动时, 内核初始化执行 eventpoll_init, 用来完成e
 		return 0;
 	}
 
-内核使用slab分配器在高速cache区分配内存用来存放struct epitem 和struct ppoll_entry. epitem 是内核管理epoll的基本数据结构, 当调用epoll_ctl()像系统中添加一个 fd 时, 就创建一个 epitem 实例. epitem与fd对应, epitem之间以rb_tree组织, tree的root保存在epoll实例中(epollfd, 也就是struct eventpoll). 这里使用rb_tree的原因是提高查找,插入以及删除的速度.rb_tree对以上3个操作都具有O(lgN)的时间复杂度.
+内核使用slab分配器在高速cache区分配内存用来存放struct epitem 和 struct ppoll_entry. 使用cache是因为epoll对所监视的fd的有大量的频繁操作
 
-	/*
-	 * Each file descriptor added to the eventpoll interface will
-	 * have an entry of this type linked to the "rbr" RB tree.
-	 * 每个添加到 eventpoll 的 fd 都有一个 epitem
-	 */
-	struct epitem {
-	    struct rb_node  rbn;   		// 红黑树. 
-	    struct list_head  rdllink;  // 双向链表, 已经就绪的epitem(监听的fd)都会被链到eventpoll的rdllist中
-	    struct epitem  *next;
-	 	struct epoll_filefd  ffd;   //epitem 对应的fd信息
-	 	int  nwait;                 //poll操作中事件的个数
+2. epoll_create1
 
-	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列，功能类似于select/poll中的poll_table
-	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd,所以一个eventpoll结构体会对应多个epitem结构体.
-	    struct list_head  fllink;   //双向链表, 用来链接被监视的fd对应的struct file. 因为file里有f_ep_link,用来保存所有监视这个文件的epoll节点
-	    struct epoll_event  event;  //注册的感兴趣的事件, epoll_ctl时从用户空间传入的 epoll_event	
+epoll_create1系统调用的内核实现, 
+
+	SYSCALL_DEFINE1(epoll_create1, int, flags)
+	{
+		int error, fd;
+		struct eventpoll *ep = NULL;
+		struct file *file;
+		...
+		error = ep_alloc(&ep);
+
+		/*
+		 * Creates all the items needed to setup an eventpoll file. That is a file structure and a free file descriptor.
+		 */
+		fd = get_unused_fd_flags(O_RDWR | (flags & O_CLOEXEC));
+
+		file = anon_inode_getfile("[eventpoll]", &eventpoll_fops, ep,
+					 O_RDWR | (flags & O_CLOEXEC));
+
+		ep->file = file;
+		fd_install(fd, file);
+		return fd;
 	}
 
 
