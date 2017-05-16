@@ -297,8 +297,56 @@ epoll_ctl 系统调用的内核实现
 		return error;
 	}
 
-针对注册新的fd的事件类型, 核心是ep_insert(), 主要完成以下工作
-	a. 
+针对注册新的fd的事件类型, 核心是 ep_insert()
+
+	static int ep_insert(struct eventpoll *ep, struct epoll_event *event, struct file *tfile, int fd, int full_check)		
+	{
+		struct epitem *epi;
+		struct ep_pqueue epq;
+
+		epi = kmem_cache_alloc(epi_cache, GFP_KERNEL))
+
+		/* Item initialization follow here ... */
+		INIT_LIST_HEAD(&epi->rdllink);
+		INIT_LIST_HEAD(&epi->fllink);
+		INIT_LIST_HEAD(&epi->pwqlist);
+		epi->ep = ep;
+		ep_set_ffd(&epi->ffd, tfile, fd);
+		epi->event = *event;
+		epi->nwait = 0;
+		epi->next = EP_UNACTIVE_PTR;
+		...
+		/* Initialize the poll table using the queue callback */
+		epq.epi = epi;
+		init_poll_funcptr(&epq.pt, ep_ptable_queue_proc);
+
+		revents = ep_item_poll(epi, &epq.pt);
+	
+		list_add_tail_rcu(&epi->fllink, &tfile->f_ep_links);
+
+		ep_rbtree_insert(ep, epi);
+	
+		/* now check if we've created too many backpaths */
+		error = -EINVAL;
+		if (full_check && reverse_path_check())
+			goto error_remove_epi;
+	
+		/* We have to drop the new item inside our item list to keep track of it */
+		spin_lock_irqsave(&ep->lock, flags);
+	
+		/* If the file is already "ready" we drop it inside the ready list */
+		if ((revents & event->events) && !ep_is_linked(&epi->rdllink)) {
+			list_add_tail(&epi->rdllink, &ep->rdllist);
+			ep_pm_stay_awake(epi);
+	
+			/* Notify waiting tasks that events are available */
+			if (waitqueue_active(&ep->wq))
+				wake_up_locked(&ep->wq);
+			if (waitqueue_active(&ep->poll_wait))
+				pwake++;
+		}
+		return 0;
+	}
 
 
 ## Demo 示列
