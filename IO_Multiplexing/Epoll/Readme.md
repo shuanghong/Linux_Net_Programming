@@ -111,7 +111,7 @@ struct eventpoll 是 epoll的核心结构, 执行epoll_create1时创建一个eve
 
 	struct eventpoll {
 		...
-		wait_queue_head_t wq;			//内核函数sys_epoll_wait()中使用的等待队列, 执行epoll_wait()的进程会挂在这个等待队列上
+		wait_queue_head_t wq;			//内核函数sys_epoll_wait()中使用的等待队列, 执行epoll_wait()的当前进程(current指针)会挂在这个等待队列上
 		wait_queue_head_t poll_wait;	//file->poll()中使用的等待队列, 因为eventpoll 本身也是一个file, 所以有poll操作, 在epfd本身被poll的时候有一个对应的wait_queue_head_t 队列用来唤醒上面的进程或者函数
 	
 		struct list_head rdllist;		//在epoll_wait 阶段, 把就绪的fd放在这个事件就绪链表上, rdllist 里面放的是epitem 这个结构
@@ -151,11 +151,11 @@ struct epitem 是内核管理epoll所监视的fd的数据结构, 执行epoll_ctl
 	    struct rb_node  rbn;   		// 红黑树, 保存被监视的fd
 	    struct list_head  rdllink;  // 双向链表, 已经就绪的epitem(fd)都会被链到eventpoll的rdllist中
 	    struct epitem  *next;
-	 	struct epoll_filefd  ffd;   //保存被监视fd对应的file, 在ep_insert()--->ep_set_ffd()中赋值
+	 	struct epoll_filefd  ffd;   //保存被监视的fd和它对应的file结构, 在ep_insert()--->ep_set_ffd()中赋值
 	 	int  nwait;                 //poll操作中事件的个数
 
 	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列，功能类似于select/poll中的poll_table
-	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd,所以一个eventpoll结构体会对应多个epitem结构体.
+	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd, 所以一个eventpoll结构体会对应多个epitem结构体.
 	    struct list_head  fllink;   //双向链表, 用来链接被监视的fd对应的struct file. 因为file里有f_ep_link, 用来保存所有监视这个文件的epoll节点
 	    struct epoll_event  event;  //注册的感兴趣的事件, epoll_ctl时从用户空间传入的 epoll_event	
 	}
