@@ -154,14 +154,37 @@ struct epitem 是内核管理epoll所监视的fd的数据结构, 执行epoll_ctl
 	 	struct epoll_filefd  ffd;   //保存被监视的fd和它对应的file结构, 在ep_insert()--->ep_set_ffd()中赋值
 	 	int  nwait;                 //poll操作中事件的个数
 
-	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列，功能类似于select/poll中的poll_table
+	    struct list_head  pwqlist;  //双向链表, 保存被监视fd的等待队列
 	    struct eventpoll  *ep;      //当前 epitem 属于哪个eventpoll, 通常一个epoll实例对应多个被监视的fd, 所以一个eventpoll结构体会对应多个epitem结构体.
 	    struct list_head  fllink;   //双向链表, 用来链接被监视的fd对应的struct file. 因为file里有f_ep_link, 用来保存所有监视这个文件的epoll节点
 	    struct epoll_event  event;  //注册的感兴趣的事件, epoll_ctl时从用户空间传入的 epoll_event	
 	}
 
+- eppoll_entry
+
+一个 epitem 关联到一个eventpoll, 就会有一个对应的struct eppoll_entry. eppoll_entry 主要完成epitem和epitem 事件发生时的callback 函数之间的关联.  
+在ep_ptable_queue_proc函数中, 创建 eppoll_entry 对象, 设置等待队列中的回调函数设置为ep_poll_callback, 然后加入设备等待队列(将eppoll_entry 对象到epitem的等待队列”pwqlist”). 当设备就绪时，会唤醒等待队列上的进程，同时会取出等待队列上的eppoll_entry元素，调用其回调函数，对于epoll来说，回调函数为ep_poll_callback
+
+	struct eppoll_entry {
+		/* List header used to link this structure to the "struct epitem" */
+		struct list_head llink;
+	
+		/* The "base" pointer is set to the container "struct epitem" */
+		struct epitem *base;
+	
+		/*
+		 * Wait queue item that will be linked to the target file wait queue head.
+		 */
+		wait_queue_t wait;
+	
+		/* The wait queue head that linked the "wait" wait queue item */
+		wait_queue_head_t *whead;
+	};
+
 
 ### system call 的内核实现
+
+
 1. eventpoll_init() 函数
 
 Linux 操作系统启动时, 内核初始化执行 eventpoll_init, 用来完成epoll相关资源的分配和初始化, 源码如下:
@@ -169,18 +192,19 @@ Linux 操作系统启动时, 内核初始化执行 eventpoll_init, 用来完成e
 	static int __init eventpoll_init(void)
 	{
 		...	
-		/* Allocates slab cache used to allocate "struct epitem" items */
+		/* Allocates slab cache used to allocate "struct epitem" items 存放 epitem 的cache */
 		epi_cache = kmem_cache_create("eventpoll_epi", sizeof(struct epitem),
-				0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL);
+				0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL);	
 	
-		/* Allocates slab cache used to allocate "struct eppoll_entry" */
+		/* Allocates slab cache used to allocate "struct eppoll_entry" 存放eppoll_entry的cache*/
 		pwq_cache = kmem_cache_create("eventpoll_pwq",
 				sizeof(struct eppoll_entry), 0, SLAB_PANIC, NULL);
 	
 		return 0;
 	}
 
-内核使用slab分配器在高速cache区分配内存用来存放struct epitem 和 struct ppoll_entry. 使用cache是因为epoll对所监视的fd的有大量的频繁操作
+内核使用slab分配器在高速cache区分配内存用来存放struct epitem 和 struct ppoll_entry. 使用cache是因为epoll对所监视的fd的有大量的频繁操作.
+
 
 2. sys_epoll_create1() 函数
 
@@ -195,9 +219,7 @@ epoll_create1 系统调用的内核实现
 		error = ep_alloc(&ep);
 
 		fd = get_unused_fd_flags(O_RDWR | (flags & O_CLOEXEC));
-
-		file = anon_inode_getfile("[eventpoll]", &eventpoll_fops, ep,
-					 O_RDWR | (flags & O_CLOEXEC));
+		file = anon_inode_getfile("[eventpoll]", &eventpoll_fops, ep, O_RDWR | (flags & O_CLOEXEC));
 
 		ep->file = file;
 		fd_install(fd, file);
@@ -207,12 +229,16 @@ epoll_create1 系统调用的内核实现
 主要工作如下:
 
 	a. ep_alloc(&ep) 申请一个 eventpoll 对象并初始化一些重要的数据结构, 如 wq, poll_wait, rdllist.
-	b. get_unused_fd_flags() 获取一个空闲的文件句柄fd
-	c. anon_inode_getfile() 创建一个struct file对象(匿名文件), 将file中的struct file_operations *f_op设置为全局变量eventpoll_fops, 将void *private指向刚创建的ep, 在后面的调用中通过 file->private_data 取得eventpoll对象
-	d. fd_install(fd, file) 把文件对象添加到当前进程的文件描述符表中, 实现fd与file结构绑定. [file.h]f = fdget(epfd); file = f.file
-	e. 返回 fd 给用户进程使用
+	b. get_unused_fd_flags() 获取一个空闲的文件句柄fd, anon_inode_getfile() 创建一个struct file对象(匿名文件), 将file中的struct file_operations *f_op设置为全局变量eventpoll_fops, 将void *private指向刚创建的ep, 在后面的调用中通过 file->private_data 取得eventpoll对象
+	c. fd_install(fd, file) 把文件对象添加到当前进程的文件描述符表中, 实现fd与file结构绑定. [file.h]f = fdget(epfd); file = f.file
+	d. 返回 fd 给用户进程使用
 
-2. sys_epoll_ctl() 函数
+执行完成后的数据结构如下:
+
+![](http://i.imgur.com/n0tQU2L.png)
+
+
+3. sys_epoll_ctl() 函数
 
 epoll_ctl 系统调用的内核实现
 
@@ -239,16 +265,16 @@ epoll_ctl 系统调用的内核实现
 
 		ep = f.file->private_data;	// 取得eventpoll对象
 		...
-		epi = ep_find(ep, tf.file, fd);	//在以ep.rbr为根的红黑树中查找被监视fd对应的 epitem对象
+		epi = ep_find(ep, tf.file, fd);	//在以ep.rbr为根的红黑树中查找被监视fd对应的epitem对象
 
 		switch (op) {
 		case EPOLL_CTL_ADD:	
-			if (!epi)		//注册一个新的fd且没找到
+			if (!epi)		//注册一个新的fd且红黑树中没找到 epitem
 			{		
 				epds.events |= POLLERR | POLLHUP;
 				error = ep_insert(ep, &epds, tf.file, fd, full_check);	//创建新的epitem对象并添加到在 eventpoll 维护的红黑树中
 			} 
-			else			// 注册一个新的fd但是又在红黑树中找到, 则是重复添加 fd 
+			else			//注册一个新的fd但是又在红黑树中找到, 则是重复添加 fd 
 				error = -EEXIST;
 			if (full_check)
 				clear_tfile_check_list();
@@ -271,7 +297,7 @@ epoll_ctl 系统调用的内核实现
 		return error;
 	}
 
-核心工作是注册新的fd的事件类型, ep_insert()
+针对注册新的fd的事件类型, 核心是ep_insert(), 主要完成以下工作
 	a. 
 
 
