@@ -220,17 +220,21 @@ epoll_ctl 系统调用的内核实现
 			revents = ep_item_poll(epi, &epq.pt);
 		
 			list_add_tail_rcu(&epi->fllink, &tfile->f_ep_links);
-	
-			ep_rbtree_insert(ep, epi);
+			
+			ep_rbtree_insert(ep, epi);	// epitem对象插入到 eventpoll 的红黑树中
 				
-			/* If the file is already "ready" we drop it inside the ready list */
+			/* If the file is already "ready" we drop it inside the ready list 
+			如果此时有用户关心的事件发生并且 epitem对象的就绪队列不为空
+			*/
 			if ((revents & event->events) && !ep_is_linked(&epi->rdllink)) {
+				// 当前的epitem对象链到 eventpoll的就绪队列上
 				list_add_tail(&epi->rdllink, &ep->rdllist);
 				ep_pm_stay_awake(epi);
 		
-				/* Notify waiting tasks that events are available */
+				//唤醒调用 epoll_wait的进程, 执行epoll_wait()中注册在等待队列上的回调函数
 				if (waitqueue_active(&ep->wq))
 					wake_up_locked(&ep->wq);
+				//唤醒 epoll 当前的 epollfd的进程
 				if (waitqueue_active(&ep->poll_wait))
 					pwake++;
 			}
@@ -256,6 +260,7 @@ epoll_ctl 系统调用的内核实现
 		ep_item_poll(struct epitem *epi, poll_table *pt)
 		{
 			pt->_key = epi->event.events;
+			// fd 当前的事件 & 用户事件, 用来判断是否已有用户关心的事件发生
 			return epi->ffd.file->f_op->poll(epi->ffd.file, pt) & epi->event.events;
 		}
 
@@ -279,4 +284,56 @@ epoll_ctl 系统调用的内核实现
 			add_wait_queue(whead, &pwq->wait);// 添加eppoll_entry的等待队列到fd的设备等待队列中
 			list_add_tail(&pwq->llink, &epi->pwqlist);// 添加eppoll_entry的llink到epitem对象的pwqlist
 			epi->nwait++;
+		}
+
+至此, 当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程, 最后会调用唤醒函数ep_poll_callback. 以 tcp socket为例, 当fd上有事件发生时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback)
+
+5. ep_poll_callback
+
+		static int ep_poll_callback(wait_queue_t *wait, unsigned mode, int sync, void *key)
+		{
+			// 由 eppoll_entry 对象中的wait取得base指向的epitem对象 epi
+			struct epitem *epi = ep_item_from_wait(wait);
+			struct eventpoll *ep = epi->ep;
+			...
+		
+			/*
+			 * If we are transferring events to userspace, we can hold no locks (because we're accessing user memory, and because of linux f_op->poll() semantics). All the events that happen during that period of time are chained in ep->ovflist and requeued later on.
+			 * 如果该callback被调用的同时, epoll_wait()已经返回了,
+			 * 也就是说, 此刻应用程序有可能已经在循环获取events,
+			 * 这种情况下, 内核将此刻发生event的epitem用一个单独的链表链起来, 不发给应用程序, 也不丢弃, 而是在下一次epoll_wait时返回给用户
+			 */
+			if (unlikely(ep->ovflist != EP_UNACTIVE_PTR)) {
+				if (epi->next == EP_UNACTIVE_PTR) {
+					epi->next = ep->ovflist;
+					ep->ovflist = epi;
+					if (epi->ws) {
+						/*
+						 * Activate ep->ws since epi->ws may get
+						 * deactivated at any time.
+						 */
+						__pm_stay_awake(ep->ws);
+					}
+		
+				}
+				goto out_unlock;
+			}
+		
+			/* If this file is already in the ready list we exit soon */
+			// 将当前的epitem 的就绪表链到 eventpoll的就绪链表(如果已存在则什么也不做), 在后续的epoll_wait中会检查eventpoll的rdllist是否为空
+			if (!ep_is_linked(&epi->rdllink)) {
+				list_add_tail(&epi->rdllink, &ep->rdllist);
+				ep_pm_stay_awake_rcu(epi);
+			}
+		
+			/*
+			 * Wake up ( if active ) both the eventpoll wait list and the ->poll() wait list.
+			 */
+			// 唤醒epoll_wait中等待队列上注册的回调函数 */
+			if (waitqueue_active(&ep->wq))
+				wake_up_locked(&ep->wq);
+			if (waitqueue_active(&ep->poll_wait))
+				pwake++;
+		
+			return 1;
 		}
