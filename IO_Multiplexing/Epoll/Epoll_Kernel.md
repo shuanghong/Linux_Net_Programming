@@ -286,7 +286,10 @@ epoll_ctl 系统调用的内核实现
 			epi->nwait++;
 		}
 
-至此, 当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程, 最后会调用唤醒函数ep_poll_callback. 以 tcp socket为例, 当fd上有事件发生时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback)
+至此, 当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时会调用ep_poll_callback, 把当前这个进程给唤醒. 以 tcp socket为例, 当fd上有事件发生(状态变化)时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback).  
+唤醒主要分两种情况:  
+唤醒注册时候的进程, 让注册的进程重新执行, 比如在epoll_wait 的时候对应的唤醒函数就是唤醒这个执行 epoll_wait 的这个进程.  
+唤醒的时候执行注册的某一个函数.
 
 5. ep_poll_callback
 
