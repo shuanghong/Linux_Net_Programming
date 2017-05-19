@@ -193,7 +193,10 @@ epoll_ctl 系统调用的内核实现
 		return error;
 	}
 
-针对注册新fd的操作, 核心是 ep_insert().
+针对注册新fd的操作, 核心是 ep_insert(), 大致流程如下:
+
+![](http://i.imgur.com/J8tq0Sn.jpg)
+
 
 1. ep_insert()
 
@@ -264,10 +267,13 @@ epoll_ctl 系统调用的内核实现
 			return epi->ffd.file->f_op->poll(epi->ffd.file, pt) & epi->event.events;
 		}
 
+此时的数据结构关系如下:
+![](http://i.imgur.com/bFZRPdO.jpg)
+
+
 4. ep_ptable_queue_proc()
 
-参数: file 由上面的epi->ffd.file传入, 是被监视fd对应的file结构, whead 是该fd对应的设备等待队列, 如果是tcp socket, 则是sock结构的sk_sleep成员的地址(函数sock_poll_wait 传入), pt 则是ep_pqueue 对象的成员pt.  
-
+参数: file 由上面的epi->ffd.file传入, 是被监视fd对应的file结构, whead 是该fd对应的设备等待队列, , 则是sock结构的sk_sleep成员的地址(函数 sock_poll_wait 传入), pt 则是ep_pqueue 对象的成员pt.  
 
 		static void ep_ptable_queue_proc(struct file *file, wait_queue_head_t *whead, poll_table *pt)
 		{
@@ -281,15 +287,93 @@ epoll_ctl 系统调用的内核实现
 
 			pwq->whead = whead;	// eppoll_entry 对象的whead为fd的设备等待队列
 			pwq->base = epi;	
-			add_wait_queue(whead, &pwq->wait);// 添加eppoll_entry的等待队列到fd的设备等待队列中
+			add_wait_queue(whead, &pwq->wait);// 添加eppoll_entry的等待队列到fd的等待队列中
 			list_add_tail(&pwq->llink, &epi->pwqlist);// 添加eppoll_entry的llink到epitem对象的pwqlist
 			epi->nwait++;
 		}
 
-至此, 当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时会调用ep_poll_callback, 把当前这个进程给唤醒. 以 tcp socket为例, 当fd上有事件发生(状态变化)时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback).  
-唤醒主要分两种情况:  
-唤醒注册时候的进程, 让注册的进程重新执行, 比如在epoll_wait 的时候对应的唤醒函数就是唤醒这个执行 epoll_wait 的这个进程.  
-唤醒的时候执行注册的某一个函数.
+add_wait_queue(whead, &pwq->wait);   
+是非常关键的一步. 对于 tcp socket, 这里的 whead 由 sock_poll_wait()传入, 是sk_sleep() 的返回结果, 是 strcut sock (sock.h)成员 sk_wq 结构中的wait值, 代码如下:
+
+	static inline wait_queue_head_t *sk_sleep(struct sock *sk)
+	{
+		BUILD_BUG_ON(offsetof(struct socket_wq, wait) != 0);
+		return &rcu_dereference_raw(sk->sk_wq)->wait;
+	}
+
+	struct socket_wq 
+	{
+		wait_queue_head_t	wait;
+		struct fasync_struct	*fasync_list;
+		unsigned long		flags; 
+		struct rcu_head		rcu;
+	} ____cacheline_aligned_in_smp;
+
+sock 结构成员 sk_wq 在 sock_init_data()函数中赋值为 socket结构的 wq. sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create()[af_inet.c/af_inet6.c 中初始化]-->inet_create()-->sock_init_data(), 这也是在创建一个 socket 的大致流程.
+而socket结构对象在 __sock_create()-->sock_alloc()-->SOCKET_I() 取得. 猜测是根据 socket_alloc 中的成员 vfs_inode, 取 socket.
+
+	struct socket_alloc 
+	{
+		struct socket socket;
+		struct inode vfs_inode;
+	};
+
+	static inline struct socket *SOCKET_I(struct inode *inode)
+	{
+		return &container_of(inode, struct socket_alloc, vfs_inode)->socket;//获取一个 socket 
+	}
+
+而 socket 则在 sock_alloc_inode()创建, 并且初始化了 socket.wq.
+
+	static struct inode *sock_alloc_inode(struct super_block *sb)
+	{
+		struct socket_alloc *ei;
+		struct socket_wq *wq;
+	
+		ei = kmem_cache_alloc(sock_inode_cachep, GFP_KERNEL);	// 创建socket_alloc, 并初始化 socket 
+		if (!ei)
+			return NULL;
+		wq = kmalloc(sizeof(*wq), GFP_KERNEL);
+		if (!wq) {
+			kmem_cache_free(sock_inode_cachep, ei);
+			return NULL;
+		}
+		init_waitqueue_head(&wq->wait);
+		wq->fasync_list = NULL;
+		wq->flags = 0;
+		RCU_INIT_POINTER(ei->socket.wq, wq);
+	
+		ei->socket.state = SS_UNCONNECTED;
+		ei->socket.flags = 0;
+		ei->socket.ops = NULL;
+		ei->socket.sk = NULL;
+		ei->socket.file = NULL;
+	
+		return &ei->vfs_inode;
+	}
+	
+至此, whead <--- strcut sock.sk_wq.wait <--- struct socket.wq, 这便是创建一个socket时fd的等待队列.
+	
+	struct socket {
+		struct socket_wq __rcu	*wq;
+		struct file		*file;
+		struct sock		*sk;
+		const struct proto_ops	*ops;
+	};
+	
+	struct socket_wq 
+	{
+		wait_queue_head_t	wait;
+		...
+	} ____cacheline_aligned_in_smp;
+
+到这的数据结构关系如下:
+
+![](http://i.imgur.com/POw1lyL.jpg)
+
+	
+当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时执行该fd 等待对上的回调函数, 把当前这个进程给唤醒. 以 tcp socket为例, 当fd上有事件发生(状态变化)时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback).  
+唤醒主要分两种情况: 唤醒注册时候的进程, 让注册的进程重新执行, 比如在epoll_wait 的时候对应的唤醒函数就是唤醒这个执行 epoll_wait 的这个进程; 或者唤醒的时候执行注册的某一个函数.
 
 5. ep_poll_callback
 
