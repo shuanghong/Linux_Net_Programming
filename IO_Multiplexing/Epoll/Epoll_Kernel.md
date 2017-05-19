@@ -331,7 +331,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 		struct socket_alloc *ei;
 		struct socket_wq *wq;
 	
-		ei = kmem_cache_alloc(sock_inode_cachep, GFP_KERNEL);	// 创建socket_alloc, 并初始化 socket 
+		ei = kmem_cache_alloc(sock_inode_cachep, GFP_KERNEL);	// 创建socket_alloc 对象, 并初始化 socket 
 		if (!ei)
 			return NULL;
 		wq = kmalloc(sizeof(*wq), GFP_KERNEL);
@@ -353,7 +353,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 		return &ei->vfs_inode;
 	}
 	
-至此, whead <--- strcut sock.sk_wq.wait <--- struct socket.wq, 这便是创建一个socket时fd的等待队列.
+至此, whead <--- strcut sock.sk_wq(->wait) <--- struct socket.wq(->wait), 这便是创建一个socket时fd的等待队列.
 	
 	struct socket {
 		struct socket_wq __rcu	*wq;
