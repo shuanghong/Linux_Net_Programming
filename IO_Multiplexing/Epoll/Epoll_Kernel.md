@@ -273,7 +273,7 @@ epoll_ctl 系统调用的内核实现
 
 4. ep_ptable_queue_proc()
 
-参数: file 由上面的epi->ffd.file传入, 是被监视fd对应的file结构, whead 是该fd对应的设备等待队列, , 则是sock结构的sk_sleep成员的地址(函数 sock_poll_wait 传入), pt 则是ep_pqueue 对象的成员pt.  
+参数: file 由上面的epi->ffd.file传入, 是被监视fd对应的file结构, whead 是该fd对应的设备等待队列, pt 则是ep_pqueue 对象的成员 struct poll_table pt.  
 
 		static void ep_ptable_queue_proc(struct file *file, wait_queue_head_t *whead, poll_table *pt)
 		{
@@ -293,7 +293,7 @@ epoll_ctl 系统调用的内核实现
 		}
 
 add_wait_queue(whead, &pwq->wait);   
-是非常关键的一步. 对于 tcp socket, 这里的 whead 由 sock_poll_wait()传入, 是sk_sleep() 的返回结果, 是 strcut sock (sock.h)成员 sk_wq 结构中的wait值, 代码如下:
+是非常关键的一步. 对于 tcp socket, 这里的 whead 由 sock_poll_wait()传入, 是sk_sleep()的返回结果, 是 strcut sock (sock.h)成员 sk_wq 结构中的wait值, 代码如下:
 
 	static inline wait_queue_head_t *sk_sleep(struct sock *sk)
 	{
@@ -309,8 +309,9 @@ add_wait_queue(whead, &pwq->wait);
 		struct rcu_head		rcu;
 	} ____cacheline_aligned_in_smp;
 
-sock 结构成员 sk_wq 在 sock_init_data()函数中赋值为 socket结构的 wq. sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create()[af_inet.c/af_inet6.c 中初始化]-->inet_create()-->sock_init_data(), 这也是在创建一个 socket 的大致流程.
-而socket结构对象在 __sock_create()-->sock_alloc()-->SOCKET_I() 取得. 猜测是根据 socket_alloc 中的成员 vfs_inode, 取 socket.
+strcut sock 成员 sk_wq 在 sock_init_data()函数中赋值为 strcut socket 成员 wq.  
+sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create()[af_inet.c/af_inet6.c 中初始化]-->inet_create()-->sock_init_data(), 这也是在创建一个 socket 的大致流程.  
+而socket结构对象在 __sock_create()-->sock_alloc()-->SOCKET_I() 取得, 根据 socket_alloc 中的成员 vfs_inode, 取 socket.
 
 	struct socket_alloc 
 	{
