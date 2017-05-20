@@ -311,7 +311,7 @@ add_wait_queue(whead, &pwq->wait);
 
 strcut sock 成员 sk_wq 在 sock_init_data()函数中赋值为 strcut socket 成员 wq.  
 sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create()[af_inet.c/af_inet6.c 中初始化]-->inet_create()-->sock_init_data(), 这也是在创建一个 socket 的大致流程.  
-而socket结构对象在 __sock_create()-->sock_alloc()-->SOCKET_I() 取得, 根据 socket_alloc 中的成员 vfs_inode, 取 socket.
+而socket结构对象在 __sock_create()-->sock_alloc()-->SOCKET_I() 取得, 根据 socket_alloc 中的成员 vfs_inode, 取 socket 对象.
 
 	struct socket_alloc 
 	{
@@ -374,13 +374,14 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 
 	
 当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时执行该fd 等待队列的回调函数, 把当前这个进程给唤醒.   
-以 tcp socket为例, 当fd上有事件发生时, 如客户端发起connect(), 服务端收到客户端ACK, 调用流程 tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_child_process()-->parent->sk_data_ready(parent)[sock_def_readable]-->wake_up_interruptible_sync_poll()-->__wake_up_sync_key()-->__wake_up_common()-->curr->func(对于加入epoll的fd而言即为 ep_poll_callback).
+以 tcp socket为例, 当fd上有事件发生时, 如客户端发起connect() 三次握手, 服务端收到客户端ACK, 调用流程 tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_child_process()-->parent->sk_data_ready(parent)[sock_def_readable]-->wake_up_interruptible_sync_poll()-->__wake_up_sync_key()-->__wake_up_common()-->curr->func(对于加入epoll的fd而言即为 ep_poll_callback).
 
 	调用流程参考:
 	http://blog.csdn.net/zhangskd/article/details/45770323
 	http://blog.csdn.net/a364572/article/details/40628171
 
-	如果是客户端send(), 则调用流程: tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_rcv_established()-->tcp_data_queue()-->sk->sk_data_ready(sk)[sock_def_readable]...-->ep_poll_callback()
+	如果是客户端send(), 则服务端调用流程:  
+	tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_rcv_established()-->tcp_data_queue()-->sk->sk_data_ready(sk)[sock_def_readable]...-->ep_poll_callback()
 	
 唤醒主要分两种情况: 唤醒注册时候的进程, 让注册的进程重新执行, 比如在epoll_wait 的时候对应的唤醒函数就是唤醒这个执行 epoll_wait 的这个进程; 或者唤醒的时候执行注册的某一个函数.
 
@@ -388,9 +389,9 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 
 		static int ep_poll_callback(wait_queue_t *wait, unsigned mode, int sync, void *key)
 		{
-			// 由 eppoll_entry 对象中的wait取得base指向的epitem对象 epi
-			struct epitem *epi = ep_item_from_wait(wait);
-			struct eventpoll *ep = epi->ep;
+			
+			struct epitem *epi = ep_item_from_wait(wait);// 由eppoll_entry对象中的wait取得base指向的epitem对象 epi
+			struct eventpoll *ep = epi->ep;	// 由 epi取得eventpoll对象
 			...
 		
 			/*
@@ -416,7 +417,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 			}
 		
 			/* If this file is already in the ready list we exit soon */
-			// 将当前的epitem 的就绪表链到 eventpoll的就绪链表(如果已存在则什么也不做), 在后续的epoll_wait中会检查eventpoll的rdllist是否为空
+			// 将当前的 epitem 的就绪表链到 eventpoll的就绪链表,表明当前的fd就绪(在后续的epoll_wait中会根据eventpoll的rdllist是否为空判断fd的事件)
 			if (!ep_is_linked(&epi->rdllink)) {
 				list_add_tail(&epi->rdllink, &ep->rdllist);
 				ep_pm_stay_awake_rcu(epi);
@@ -425,7 +426,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 			/*
 			 * Wake up ( if active ) both the eventpoll wait list and the ->poll() wait list.
 			 */
-			// 唤醒epoll_wait中等待队列上注册的回调函数 */
+			// 唤醒epoll_wait中等待队列上的进程, 其实就是调用epoll_wait()的进程
 			if (waitqueue_active(&ep->wq))
 				wake_up_locked(&ep->wq);
 			if (waitqueue_active(&ep->poll_wait))
@@ -433,3 +434,77 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 		
 			return 1;
 		}
+
+
+### sys_epoll_wait() 函数
+
+epoll_wait 系统调用的内核实现
+
+	SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,	int, maxevents, int, timeout)
+	{
+		// 由 epfd 取得对应的 file结构(参考 epoll_create1()完成后的数据结构图)
+		f = fdget(epfd);
+		...
+		// 由 file 结构取得 eventpoll 对象
+		ep = f.file->private_data;
+	
+		/* Time to fish for events ... */
+		error = ep_poll(ep, events, maxevents, timeout);
+	}
+
+	static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events, int maxevents, long timeout)
+	{
+		int res = 0, eavail, timed_out = 0;
+		unsigned long flags;
+		long slack = 0;
+		wait_queue_t wait;
+		ktime_t expires, *to = NULL;
+	
+		if (timeout > 0) {
+			...
+		} else if (timeout == 0) {
+			...
+			goto check_events;
+		}
+	
+	fetch_events:
+		spin_lock_irqsave(&ep->lock, flags);
+	
+		if (!ep_events_available(ep)) //检查 eventpoll 对象的就绪表 rdllist是否为空, 在 ep_poll_callback()中会把就绪的fd(epi对象)链入这个表
+			{
+			/*
+			 * We don't have any available event to return to the caller We need to sleep here, and we will be wake up by ep_poll_callback() when events will become available.
+			 * 如果 rdllist 为空, 则没有fd就绪, 将当前进程添加到eventpoll的等待队列中, 进程休眠, 等待 ep_poll_callback唤醒
+			 */
+			init_waitqueue_entry(&wait, current);
+			__add_wait_queue_exclusive(&ep->wq, &wait);
+	
+			for (;;) {
+				set_current_state(TASK_INTERRUPTIBLE);
+				// 休眠期间如果 ep_poll_callback被调用或者 timeout时间到, 则跳出循环, 进程继续运行 
+				if (ep_events_available(ep) || timed_out)
+					break;
+				if (signal_pending(current)) {
+					res = -EINTR;
+					break;
+				}
+	
+				spin_unlock_irqrestore(&ep->lock, flags);
+				// 这里进程开始真正的休眠, 让出 CPU
+				if (!schedule_hrtimeout_range(to, slack, HRTIMER_MODE_ABS))
+					timed_out = 1;
+	
+				spin_lock_irqsave(&ep->lock, flags);
+			}
+	
+			__remove_wait_queue(&ep->wq, &wait);
+			__set_current_state(TASK_RUNNING);
+		}
+	check_events:
+			...
+			// 发送 events 到用户空间
+		    !(res = ep_send_events(ep, events, maxevents)) && !timed_out)
+			goto fetch_events;
+	
+		return res;
+	}
