@@ -48,10 +48,9 @@ epoll 是 Linux 上特有的I/O复用函数, 在Linux2.6内核中正式引入. e
 	#include <sys/epoll.h>
 	int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
 	参数 epfd: epoll_create 返回的 fd
-		 fd: 需要操作的目标文件描述符, 如 listenfd 或 connfd
 		 events: 结构同epoll_ctl中的event, 保存内核返回给用户程序的读写事件.
 		 maxevents: 每次处理的最大事件数, 即多少个 event 结构
-		 timeout: 超时时间(ms), 0 --- 调用立即返回, -1 --- 调用阻塞直到某个事件发生.
+		 timeout: 超时时间(ms), 0 --- 检查是否有感兴趣的事件发生, 并立即返回, -1 --- 调用阻塞直到某个事件发生.
 	返回值: 调用成功则返回就绪的文件描述符个数, -1 --- 调用出错并设置 errno
 
 epoll_wait 函数如果检测到事件, 将所有的就绪事件从内核事件表(由epfd参数指定)复制到参数 events指向的结构数组中, 这个数组只用于输出epoll_wait检测到的就绪事件, 而不像 select 和 poll 的数组参数既用于传入用户注册的事件, 又用于输出内核检测到的事件, 这就极大地提供了用户程序索引就绪文件描述符的效率.  
@@ -293,7 +292,6 @@ epoll_ctl 系统调用的内核实现
 				error = -ENOENT;
 			break;
 		}
-
 		return error;
 	}
 
