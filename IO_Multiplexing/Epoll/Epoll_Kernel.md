@@ -60,7 +60,7 @@ struct epitem 是内核管理epoll所监视的fd的数据结构, 执行epoll_ctl
 - eppoll_entry
 
 一个 epitem 关联到一个eventpoll, 就会有一个对应的struct eppoll_entry. eppoll_entry 主要完成epitem和epitem 事件发生时的callback 函数之间的关联.  
-在ep_ptable_queue_proc函数中, 创建 eppoll_entry 对象, 设置等待队列中的回调函数为ep_poll_callback, 然后加入设备等待队列(将eppoll_entry 对象到epitem的等待队列”pwqlist”). 当设备就绪时，会唤醒等待队列上的进程，同时会取出等待队列上的eppoll_entry元素，调用其回调函数，对于epoll来说，回调函数为ep_poll_callback
+在ep_ptable_queue_proc函数中, 创建 eppoll_entry 对象, 设置等待队列中的回调函数为ep_poll_callback, 然后加入设备等待队列(将eppoll_entry 对象链入epitem的等待队列”pwqlist”). 当设备就绪时，会唤醒等待队列上的进程，同时会取出等待队列上的eppoll_entry元素，调用其回调函数，对于epoll来说，回调函数为ep_poll_callback
 
 	struct eppoll_entry {
 		/* List header used to link this structure to the "struct epitem" */
@@ -353,7 +353,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 		return &ei->vfs_inode;
 	}
 	
-至此, whead <--- strcut sock.sk_wq(->wait) <--- struct socket.wq(->wait), 这便是创建一个socket时fd的等待队列.
+至此, whead <--- strcut sock.sk_wq(->wait) <--- struct socket.wq(->wait), 这便是创建一个socket时fd的设备等待队列.
 	
 	struct socket {
 		struct socket_wq __rcu	*wq;
@@ -405,15 +405,7 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 					epi->next = ep->ovflist;
 					ep->ovflist = epi;
 					if (epi->ws) {
-						/*
-						 * Activate ep->ws since epi->ws may get
-						 * deactivated at any time.
-						 */
-						__pm_stay_awake(ep->ws);
-					}
-		
-				}
-				goto out_unlock;
+					...
 			}
 		
 			/* If this file is already in the ready list we exit soon */
@@ -435,6 +427,8 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 			return 1;
 		}
 
+应用程序调用 epoll_wait()进入休眠, 当有事件到达, ep_poll_callback() 被执行的数据结构如下:  
+![](http://i.imgur.com/mybNjvC.jpg)
 
 ### sys_epoll_wait() 函数
 
@@ -448,7 +442,6 @@ epoll_wait 系统调用的内核实现
 		// 由 file 结构取得 eventpoll 对象
 		ep = f.file->private_data;
 	
-		/* Time to fish for events ... */
 		error = ep_poll(ep, events, maxevents, timeout);
 	}
 
@@ -508,3 +501,97 @@ epoll_wait 系统调用的内核实现
 	
 		return res;
 	}
+
+	// 获取 fd 上的事件位, 发送到用户空间.
+	// 入参是事件结构 events 和 maxevents
+	static int ep_send_events(struct eventpoll *ep, struct epoll_event __user *events, int maxevents)
+	{
+		struct ep_send_events_data esed;
+	
+		esed.maxevents = maxevents;
+		esed.events = events;
+	
+		return ep_scan_ready_list(ep, ep_send_events_proc, &esed, 0, false);
+	}
+
+	static int ep_scan_ready_list(struct eventpoll *ep,
+				      int (*sproc)(struct eventpoll *,
+						   struct list_head *, void *),
+				      void *priv, int depth, bool ep_locked)
+	{
+		...
+		list_splice_init(&ep->rdllist, &txlist);	// eventpoll 上的就绪表全部转移到txlist, rdllist被清空(设为初始状态, 指向自己)
+		ep->ovflist = NULL;						// 此时eventpoll就绪表已经为空, 我们即将处理这一次就绪表上的fd事件, 如果在发送到用户空间的间隙, 又有新事件到来, 在 ep_poll_callback() 中通过判断 ep->ovflist != EP_UNACTIVE_PTR, 把新事件链到ovflist上, 留做下一次处理
+
+		error = (*sproc)(ep, &txlist, priv);	// 调用 ep_send_events_proc, events 发送到用户空间
+	
+		...
+		// ep->ovflist 在 ep_poll_callback()被修改, 说明有新事件, 把新事件重新链到eventpoll就绪表 rdllist, 下一次 epoll_wait()时处理
+		for (nepi = ep->ovflist; (epi = nepi) != NULL;
+		     nepi = epi->next, epi->next = EP_UNACTIVE_PTR) 
+		{
+
+			if (!ep_is_linked(&epi->rdllink)) {
+				list_add_tail(&epi->rdllink, &ep->rdllist);
+				ep_pm_stay_awake(epi);
+			}
+		}
+		...
+		ep->ovflist = EP_UNACTIVE_PTR;
+		
+		list_splice(&txlist, &ep->rdllist);	//上一次没有处理完的epitem, 重新插入到eventpoll的就绪表
+		...
+	}
+
+	// 发送 events 到用户空间
+	// head: 传入的eventpoll就绪表 txlist, priv: 包含用户空间的事件结构
+	static int ep_send_events_proc(struct eventpoll *ep, struct list_head *head, void *priv)
+	{
+		struct ep_send_events_data *esed = priv;
+		int eventcnt;
+		unsigned int revents;
+		struct epitem *epi;
+		struct epoll_event __user *uevent;
+		poll_table pt;
+	
+		init_poll_funcptr(&pt, NULL);		// pt 中的回调为 NULL
+	
+		for (eventcnt = 0, uevent = esed->events;
+		     !list_empty(head) && eventcnt < esed->maxevents;) 
+			{
+			epi = list_first_entry(head, struct epitem, rdllink);	//取得就绪fd的epi
+	
+			list_del_init(&epi->rdllink);		// 当前 epi 脱离 eventpoll的就绪表
+	
+			revents = ep_item_poll(epi, &pt);	// 调用就绪fd对应的poll函数, 参照 ep_insert()中的调用流程, 只不过这次pt中的回调函数为空, 仅仅是取得 fd 上的事件标志位按位与上用户空间关心的事件位
+			if (revents) // 不为0则表示用户关心的事件发生
+			{
+				if (__put_user(revents, &uevent->events) ||
+				    __put_user(epi->event.data, &uevent->data)) //当前事件放入用户空间, 对于listenfd 来说, epi->event.data是epoll_ctl()传入的listenfd, 在用户程序判断  events[i].data.fd==listenfd 则说明当前就绪的fd是listenfd, 表明是新连接介入
+				{	// 如果发送失败, 把当前 epi 重新添加到eventpoll就绪表 txlist, 返回当前的事件个数
+					list_add(&epi->rdllink, head);
+					ep_pm_stay_awake(epi);
+					return eventcnt ? eventcnt : -EFAULT;
+				}
+				eventcnt++;			// 就绪的事件个数, 作为返回值给 epoll_wait
+				uevent++;
+				if (epi->event.events & EPOLLONESHOT)
+					epi->event.events &= EP_PRIVATE_BITS;
+				else if (!(epi->event.events & EPOLLET)) {
+				/* 边沿触发(ET)和电平触发区别体现在这里.  
+				 * 如果是电平触发(非EPOLLET), 就绪的fd重新被链入到 eventpoll的就绪表中, 下次调用epoll_wait()会继续处理.
+				 * 如果是边沿触发, 则不会重新加入就绪表, 除非fd再次发生了状态改变,ep_poll_callback被调用
+				 * /	
+					list_add_tail(&epi->rdllink, &ep->rdllist);
+					ep_pm_stay_awake(epi);
+				}
+			}
+		}
+		return eventcnt;
+	}
+
+## 总结
+
+应用程序一次 epoll_wait(), listenfd和connfd同时发生事件的数据结构:
+
+![](http://i.imgur.com/L7AkZc2.jpg)
