@@ -373,7 +373,15 @@ sock_init_data()的调用流程是 sock_create()-->__sock_create()-->pf->create(
 ![](http://i.imgur.com/POw1lyL.jpg)
 
 	
-当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时执行该fd 等待对上的回调函数, 把当前这个进程给唤醒. 以 tcp socket为例, 当fd上有事件发生(状态变化)时, 调用流程 sock_def_wakeup()-->wake_up_interruptible_all()-->__wake_up()-->curr->func(对于加入epoll的fd而言即为ep_poll_callback).  
+当硬件设备有数据到来时, 硬件中断处理函数会唤醒该等待队列上等待的进程时执行该fd 等待队列的回调函数, 把当前这个进程给唤醒.   
+以 tcp socket为例, 当fd上有事件发生时, 如客户端发起connect(), 服务端收到客户端ACK, 调用流程 tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_child_process()-->parent->sk_data_ready(parent)[sock_def_readable]-->wake_up_interruptible_sync_poll()-->__wake_up_sync_key()-->__wake_up_common()-->curr->func(对于加入epoll的fd而言即为 ep_poll_callback).
+
+	调用流程参考:
+	http://blog.csdn.net/zhangskd/article/details/45770323
+	http://blog.csdn.net/a364572/article/details/40628171
+
+	如果是客户端send(), 则调用流程: tcp_v4_rcv()-->tcp_v4_do_rcv()-->tcp_rcv_established()-->tcp_data_queue()-->sk->sk_data_ready(sk)[sock_def_readable]...-->ep_poll_callback()
+	
 唤醒主要分两种情况: 唤醒注册时候的进程, 让注册的进程重新执行, 比如在epoll_wait 的时候对应的唤醒函数就是唤醒这个执行 epoll_wait 的这个进程; 或者唤醒的时候执行注册的某一个函数.
 
 5. ep_poll_callback
