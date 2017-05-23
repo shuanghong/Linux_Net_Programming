@@ -55,13 +55,13 @@ public:
         std::swap(m_sockfd,  rhs.m_sockfd);
     }
 
-    void bind(const struct sockaddr *addr);
-    void listen();
-
     void setOption(uint32_t op, bool on);
 
-    int recv(void *buf, int len, int flags);
-    int send(const void *buf, int len, int flags);
+    void bind(const struct sockaddr_in *addr);
+    void listen(const int backlog = SOMAXCONN);
+    int accept(const struct sockaddr_in *addr);
+    int receiveData(int connectfd, void *buf, int len);
+    int sendData(int connectfd, const void *buf, int len);
 
     int getFd() const
     {
