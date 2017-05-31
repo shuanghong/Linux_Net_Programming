@@ -17,20 +17,83 @@ socket()函数创建的套接字默认都是阻塞的, 当线程执行socket相�
 [https://www.zhihu.com/question/32163005](https://www.zhihu.com/question/32163005)
 
 ## IO 模型
+一次IO操作, 以read为例, 分为两个阶段:
+
+* 阶段一, 等待数据就绪,到达内核缓冲区(Waiting for the data to be ready).
+* 阶段二, 将数据从内核空间拷贝到用户空间(Copying the data from the kernel to the process)
 
 ### 阻塞式IO(blocking IO)
 如上所述, 默认情况所有的socket都是阻塞的, 以数据包套接字 recvfrom() 为例, 过程如下:
 
 ![](http://i.imgur.com/6oRQvoY.gif) 
 
-应用程序调用 recvfrom(), 如果没有数据收到则线程或者进程就会被挂起, 直到数据到达并且被复制到应用进程的缓冲区或者发生错误才返回(最常见的错误是被信号中断). 进程从调用recvfrom()开始到它返回的整段时间内是被阻塞的.
+应用程序调用 recvfrom(), 如果没有数据收到则线程或者进程就会被挂起, 直到数据到达并且被复制到应用进程的缓冲区或者发生错误才返回(最常见的错误是被信号中断).  
+进程在IO操作的两个阶段中都处于阻塞状态.
 
 ### 非阻塞IO(non-blocking IO)
 将IO设为非阻塞, 当执行read时如果没有数据, 则返回错误, 如EWOULDBLOCK. 这样就不会阻塞线程, 但是需要不断的轮询来读取或写入. 过程如下:
 
 ![](http://i.imgur.com/WqfQjTs.gif)
 
+对于网络IO来说, IO的第一阶段通常比第二阶段花更多的时间, 所以非阻塞式IO旨在将第一阶段非阻塞化. 调用非阻塞式read时, 如果数据未就绪则直接返回; 反之则阻塞式地进行第二阶段的IO.  
+在数据未就绪的情况下通常需要结合轮询机制, 保证数据就绪的IO能够被及时的处理, 这对CPU的消耗也是比较大的.
+
+### IO 复用(也称为 event driven IO)
+对于IO复用来说, 进程/线程通常阻塞在select、poll、epoll上, 而不是阻塞在真正的IO系统调用read/write上, 其好处是可以同时监听多个IO的状态. 基本原理是用户进程调用select/epoll不断的轮询所负责的IO, 当某个IO有数据到达时, 由内核通知用户进程. 过程如下:
+
+![](http://i.imgur.com/PwqL85w.gif)
+
+IO复用本身也是阻塞的, 以select为例, 在调用select期间用户进程也被阻塞, 直到内核通知数据就绪才返回, 并且在IO操作的阶段二同样阻塞. 
+
+### 信号驱动(signal driven) IO
+
+使用信号驱动IO, 要求内核当文件描述符准备就绪以后发送相应的信号通知我们. 与IO复用有类似之处, 但它是通过内核的信号机制实现非阻塞的就绪通知. 过程如下:
+
+![](http://i.imgur.com/K0qRis8.gif)
+
+### 异步 IO
+
+异步IO, 由POSIX规范定义, 其工作机制是: 告知内核启动某个操作, 并让内核在整个操作完成后通知我们. 就是说, 对于IO操作的那两个阶段, 用户进程都不用关心, 当两个阶段都完成后由内核通知进程. 过程如下:
+
+![](http://i.imgur.com/OpetmX2.gif)
+
+进程调用aio_read()给内核传递描述符、缓冲区指针、缓冲区大小和文件偏移, 并告诉内核整个操作完成时如何通知我们. 该系统调用立即返回, 而且在等待I/O完成期间, IO两个阶段都是非阻塞的.  
+对比信号驱动IO, 主要区别在于: 信号驱动由内核告诉我们何时可以开始一个IO操作(数据在内核缓冲区中), 而异步IO则由内核通知IO操作何时已经完成(数据已经在用户空间中).  
+为了实现异步IO, POSIX专门定义了一套以aio开头的API, 如: aio_read.
+
+### 各种 IO 模型的比较
+
+![](http://i.imgur.com/0oqlJ3e.gif)
+
+![](http://i.imgur.com/nabD2jp.png)
+
+前四种模型的区别在于IO的第一阶段, 第二阶段都是一样的, 阻塞和非阻塞区别在于调用blocking IO会一直block住对应的进程直到操作完成, 而non-blocking IO在kernel还准备数据的情况下会立刻返回.  
+前四种模型都是同步式IO, POSIX 关于同步、异步的定义是:
+	
+	A synchronous I/O operation causes the requesting process to be blocked until that I/O operation completes;
+    An asynchronous I/O operation does not cause the requesting process to be blocked;
+即:
+
+	同步I/O操作: 导致请求进程阻塞，直到I/O操作完成;
+	异步I/O操作: 不导致请求进程阻塞.
+
+两者的区别就在于synchronous IO做”IO operation”的时候会将进程阻塞, 按照这个定义，之前所述的blocking IO、non-blocking IO、IO multiplexing 都属于synchronous IO.   
+定义中所指的”IO operation”是指真实的IO操作, non-blocking IO 在执行recvfrom时的IO阶段二进程是被block的. 而asynchronous IO当进程发起IO操作之后, 就直接返回再也不理睬了, 直到内核告知进程说IO完成, 在这整个过程中, 进程完全没有被block.
+
+## 关于同步、异步, 阻塞、非阻塞
+参考:
+
+[https://www.zhihu.com/question/19732473](https://www.zhihu.com/question/19732473)
+
+[http://www.cnblogs.com/Anker/p/5965654.html](http://www.cnblogs.com/Anker/p/5965654.html)
+
+[http://blog.csdn.net/historyasamirror/article/details/5778378](http://blog.csdn.net/historyasamirror/article/details/5778378)
 
 
-### IO 复用
-Linux 下IO复用的实现主要有select, poll和epoll. 有了IO复用, 线程阻塞在这些系统调用之上, 而不是阻塞在具体的IO上.
+
+
+
+
+
+
+
