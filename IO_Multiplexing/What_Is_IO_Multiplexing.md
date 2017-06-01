@@ -59,7 +59,8 @@ IO复用本身也是阻塞的, 以select为例, 在调用select期间用户进�
 
 进程调用aio_read()给内核传递描述符、缓冲区指针、缓冲区大小和文件偏移, 并告诉内核整个操作完成时如何通知我们. 该系统调用立即返回, 而且在等待I/O完成期间, IO两个阶段都是非阻塞的.  
 对比信号驱动IO, 主要区别在于: 信号驱动由内核告诉我们何时可以开始一个IO操作(数据在内核缓冲区中), 而异步IO则由内核通知IO操作何时已经完成(数据已经在用户空间中).  
-为了实现异步IO, POSIX专门定义了一套以aio开头的API, 如: aio_read.
+为了实现异步IO, POSIX专门定义了一套以aio开头的API, 如: aio_read.  
+Linux对AIO支持的很差, 并且原生的AIO并不支持socket. 很多lib都是用户空间里的多线程的模拟.
 
 ### 各种 IO 模型的比较
 
@@ -81,19 +82,33 @@ IO复用本身也是阻塞的, 以select为例, 在调用select期间用户进�
 定义中所指的”IO operation”是指真实的IO操作, non-blocking IO 在执行recvfrom时的IO阶段二进程是被block的. 而asynchronous IO当进程发起IO操作之后, 就直接返回再也不理睬了, 直到内核告知进程说IO完成, 在这整个过程中, 进程完全没有被block.
 
 ## 关于同步、异步, 阻塞、非阻塞
+Posix 对于同步、异步的定义:
+
+	同步I/O操作: 导致请求进程阻塞,直到I/O操作完成;
+	异步I/O操作: 不导致请求进程阻塞	
+
+个人理解, 同步、异步区别在于获取结果的方式, 同步是主动去读取数据, 在读取的过程中还分阻塞和非阻塞; 异步是发出请求后就不需干预, 由内核完成数据的读取并告之用户.
+
+阻塞、非阻塞的区别在于执行具体的I/O操作如read/write时, 进程是否需要等待. 阻塞即当数据未就绪时, 进程等待; 非阻塞是数据未就绪时直接返回.
+
+下图摘自知乎: [https://www.zhihu.com/question/19732473](https://www.zhihu.com/question/19732473)
+
+![](http://i.imgur.com/7dPY3qw.png)
+
 参考:
 
-[https://www.zhihu.com/question/19732473](https://www.zhihu.com/question/19732473)
+
 
 [http://www.cnblogs.com/Anker/p/5965654.html](http://www.cnblogs.com/Anker/p/5965654.html)
 
 [http://blog.csdn.net/historyasamirror/article/details/5778378](http://blog.csdn.net/historyasamirror/article/details/5778378)
 
+[http://yaocoder.blog.51cto.com/2668309/1308899](http://yaocoder.blog.51cto.com/2668309/1308899)
 
+## 经验
 
-
-
-
+### 异步不一定比同步高效
+参考 [https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk](https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk)
 
 
 
