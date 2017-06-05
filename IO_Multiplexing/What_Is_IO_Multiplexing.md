@@ -108,7 +108,9 @@ Posix 对于同步、异步的定义:
 ## 经验
 
 ### 异步不一定比同步高效
-参考 [https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk](https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk)
+摘自 [https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk](https://zhuanlan.zhihu.com/p/20395756?columnSlug=fangtalk)
+
+如果计算资源是无限的, 异步一定比同步效率高. 但是在相同的计算资源下, 就不一定, 任何事情, 总是需要“有人”去做, 你不做, 就是其他人去做. 而这个其他人, 可能是其他用户空间的进程, 例如用户态模拟的AIO, 无非是多进程多线程或者线程池; 也可能是内核线程(Linux内核有好多功能就是基于内核线程, 例如pdflush、工作队列). 但是不管是“谁”, 操作系统都需要调度和协调(进程切换, 也就是context switch; 协调包括进程同步、以及调度算法). 这个调度和协调的代价, 很可能远远高于你的一次异步操作.
 
 
 
