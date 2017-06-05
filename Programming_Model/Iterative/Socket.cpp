@@ -22,8 +22,42 @@ int Socket::accept(const struct sockaddr_in *addr)
     return connfd;
 }
 
-void Socket::setOption(uint32_t op, bool on)
+void Socket::setOption(SocketOption op, bool on)
 {
+    int optval = on ? 1 : 0;
+
+    switch (op)
+    {
+      case SocketOption::AddrReuse: 
+      {
+          if (::setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0)
+          {
+            
+          }
+          break;       
+      }
+      case SocketOption::PortReuse: 
+      {
+          if (::setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) < 0)
+          {
+            
+          }
+          break;       
+      }
+      case SocketOption::TcpNoDelay:
+      {
+          if (::setsockopt(m_sockfd, IPPROTO_TCP, TCP_NODELAY, &optval, static_cast<socklen_t>(sizeof optval)) < 0)
+          {
+            
+          }
+          break;       
+      }
+      default:
+      {
+        break;
+      }
+       
+    }
 
 }
 

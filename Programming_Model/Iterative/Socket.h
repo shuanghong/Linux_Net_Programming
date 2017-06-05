@@ -5,10 +5,18 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-
+#include <netinet/tcp.h>
 
 #include <utility>  // swap
 #include <iostream>
+
+enum class SocketOption: uint32_t
+{
+    AddrReuse = 0,
+    PortReuse,
+    TcpNoDelay,
+    Invalid
+};
 
 class Socket
 {
@@ -25,7 +33,7 @@ public:
         if (m_sockfd >=0)
         {
             int ret = ::close(m_sockfd);
-            assert( ret == 0);
+            assert(ret == 0);
         }
     }
     
@@ -46,7 +54,12 @@ public:
     {
         std::cout << "Sock move assinment opeartor called entry" << std::endl;
 
-        swap(rhs);
+        //swap(rhs);
+        int ret = ::close(m_sockfd);
+        assert(ret == 0);
+
+        m_sockfd = rhs.m_sockfd;
+        rhs.m_sockfd = -1;
         return *this;    
     }
 
@@ -55,7 +68,7 @@ public:
         std::swap(m_sockfd,  rhs.m_sockfd);
     }
 
-    void setOption(uint32_t op, bool on);
+    void setOption(SocketOption op, bool on);
 
     void bind(const struct sockaddr_in *addr);
     void listen(const int backlog = SOMAXCONN);

@@ -24,9 +24,19 @@ int main(int argc, char *argv[])
     server_addr.sin_port=htons(200);  
 
     Socket sock(Socket::create());
-    //Socket sock(std::move(Socket::create()));
     printf("Socket fd = %d\n", sock.getFd());  
 
+    /* test move assign operator =
+    Socket sock1(Socket::create());
+    printf("Socket1 fd = %d\n", sock1.getFd());  
+
+    sock = std::move(sock1);          
+    printf("Socket fd = %d\n", sock.getFd());  
+    printf("Socket1 fd = %d\n", sock1.getFd());  
+    */
+
+    sock.setOption(SocketOption::AddrReuse, true);
+    sock.setOption(SocketOption::PortReuse, true);
     sock.bind(&server_addr);
     sock.listen(5);
 
@@ -49,6 +59,8 @@ int main(int argc, char *argv[])
                 break;
             }
             buf[datalen] = '\0';
+
+            printf("Receive length:%d\nReceive data:%s\n", datalen, buf);  
 
             if (sock.sendData(connfd, buf, datalen) == -1)
             {
