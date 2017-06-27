@@ -48,7 +48,7 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        printf("Client connected, addr:%s\n", inet_ntoa(client_addr.sin_addr));  
+        printf("Client connected, addr:%s, port:%d \n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));  
 
         while(1)
         {
